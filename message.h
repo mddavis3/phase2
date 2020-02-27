@@ -22,10 +22,10 @@ struct mailbox {
 };
 
 struct mail_slot {
+   int       is_free;         //added by Michael for MboxSend - REVIEW
    int       mbox_id;
    int       status;
    char      message;         //added by Michael for MboxSend - REVIEW
-   //is_free for mailslot global array - REVIEW
    //slot_ptr pointing to the next message (used to maintain linked list) - REVIEW
    /* other items as needed... */
 };

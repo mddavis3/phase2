@@ -4,6 +4,12 @@
    University of Arizona South
    Computer Science 452
 
+   for debug console printouts:
+   if (DEBUG2 && debugflag2)
+         {
+            console ("\n");
+         }
+
    ------------------------------------------------------------------------ */
 
 #include <phase1.h>
@@ -41,6 +47,12 @@ int global_mbox_id;
 /* Dummy mailbox used for initialization */                 //added by Michael for start1
 mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL};
 
+/* Dummy mailslot used for initialization */                //added by Michael for start1
+mail_slot dummy_slot = {0, NULL, NULL, NULL};
+
+/* Dummy proc used for initialization */                    //added by Michael for start1
+mbox_proc dummy_proc = {NULL};
+
 /* -------------------------- Functions ----------------------------------- */
 
 /* ------------------------------------------------------------------------
@@ -66,8 +78,8 @@ int start1(char *arg)
    /* Disable interrupts */
    disableInterrupts();
 
-   /* Initialize the mail box table, slots, & other data structures.
-    * Initialize the Process Table
+   /* Initialize the mail box table, slots, & other data structures. - completed
+    * Initialize the Process Table - completed
     * Create I/O mailboxes and Initialize int_vec and sys_vec arrays, 
     * allocate mailboxes for interrupt handlers.
     */
@@ -79,6 +91,18 @@ int start1(char *arg)
    for (int i = 0; i < MAXMBOX; i++)
    {
       MailBoxTable[i] = dummy_mbox;
+   }
+
+   /* Initialize the mail slot table */
+   for (int i = 0; i <MAXSLOTS; i++)
+   {
+      MailSlotTable[i] = dummy_slot;
+   }
+
+   /* Initialize the phase2 proc table */
+   for (int i = 0; i < MAXPROC; i++)
+   {
+      MboxProcs[i] = dummy_proc;
    }
 
    /* Enable interrupts */
@@ -134,6 +158,7 @@ int MboxCreate(int slots, int slot_size)
    }
 
    //return -1 if slot_size is incorrect
+   //doesn't check for negative slot_size...
    if (slot_size > MAX_MESSAGE)
    {
       if (DEBUG2 && debugflag2)
@@ -152,7 +177,8 @@ int MboxCreate(int slots, int slot_size)
    //increment global int mbox_id
    //return >= 0 as the mailbox id number
    global_mbox_id++;
-   return global_mbox_id;
+   MailBoxTable[i].mbox_id = global_mbox_id;
+   return MailBoxTable[i].mbox_id;
 
 } /* MboxCreate */
 
@@ -188,6 +214,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    }
 
    //return -1 if mailbox id is inactive
+   //this might be redundant, if it's inactive, it shouldn't be in the table anyway
    if (MailBoxTable[i].status == INACTIVE)
    {
       if (DEBUG2 && debugflag2)
@@ -198,7 +225,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    }
 
    //return -1 if message size is too large
-   if (msg_size > MAX_MESSAGE) //maybe use MailBoxTable[i].max_slot_size instead of MAX_MESSAGE
+   if (msg_size > MailBoxTable[i].max_slot_size)
    {
       if (DEBUG2 && debugflag2)
       {
