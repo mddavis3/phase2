@@ -32,6 +32,8 @@ int debugflag2 = 0;
 
 /* the mail boxes */
 mail_box MailBoxTable[MAXMBOX];
+mail_slot MailSlotTable[MAXSLOTS];                          //added by Michael for start1 - REVIEW
+mbox_proc MboxProcs[MAXPROC];                               //added by Michael for start1 - REVIEW
 
 /* Mail box id used to keep track of unique mail box ids */ //added by Michael for MboxCreate
 int global_mbox_id;
@@ -196,7 +198,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    }
 
    //return -1 if message size is too large
-   if (msg_size > MAX_MESSAGE)
+   if (msg_size > MAX_MESSAGE) //maybe use MailBoxTable[i].max_slot_size instead of MAX_MESSAGE
    {
       if (DEBUG2 && debugflag2)
       {
