@@ -12,16 +12,17 @@
 
    ------------------------------------------------------------------------ */
 
+#include <stdlib.h>                    //added by Michael for test00
+#include <strings.h>                   //added by Michael for test00
+#include <stdio.h>                     //added by Michael for test00
+#include <string.h>                    //added by Michael for test00
+
 #include <phase1.h>
 #include <phase2.h>
 #include <usloss.h>
 
 #include "message.h"
 
-#include <stdlib.h>                    //added by Michael for test00
-#include <strings.h>                   //added by Michael for test00
-#include <stdio.h>                     //added by Michael for test00
-#include <string.h>                    //added by Michael for test00
 
 /* ------------------------- Prototypes ----------------------------------- */
 int start1 (char *);
@@ -30,6 +31,7 @@ static void enableInterrupts(void);    //added by Michael for test00
 void disableInterrupts(void);          //added by Michael for test00
 int check_io(void);                    //added by Michael for test00
 void check_kernel_mode(void);          //added by Michael for start1
+void insert_mail_slot(int, int);       //added for MboxSend
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -45,10 +47,10 @@ mbox_proc MboxProcs[MAXPROC];                               //added by Michael f
 int global_mbox_id;
 
 /* Dummy mailbox used for initialization */                 //added by Michael for start1
-mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL};
+mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL, NULL, NULL};
 
 /* Dummy mailslot used for initialization */                //added by Michael for start1
-mail_slot dummy_slot = {0, NULL, NULL, NULL};
+mail_slot dummy_slot = {0, NULL, NULL, NULL, NULL};
 
 /* Dummy proc used for initialization */                    //added by Michael for start1
 mbox_proc dummy_proc = {NULL};
@@ -173,6 +175,7 @@ int MboxCreate(int slots, int slot_size)
    MailBoxTable[i].status = ACTIVE;   //indicates that the mailbox is active
    MailBoxTable[i].num_slots = slots;
    MailBoxTable[i].max_slot_size = slot_size;
+   MailBoxTable[i].num_used_slots = 0;
 
    //increment global int mbox_id
    //return >= 0 as the mailbox id number
@@ -196,7 +199,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    /* Check for kernel mode */
    check_kernel_mode();
 
-   int i = 0;
+   int i, j = 0;
 
    //check for the mailbox in the mailbox table
    while (MailBoxTable[i].mbox_id != mbox_id)
@@ -234,7 +237,39 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
       return (-1);
    }
 
-   //block the calling process until the message is sent
+   //check to see if there are available mail slots
+   //block the sender if there are no available slots
+   if (MailBoxTable[i].num_used_slots >= MailBoxTable[i].num_slots)
+   {
+      //block the sender cus it's full - REVIEW
+      block_me(MAILBOXFULL);
+   }
+   
+   //once slot is available, allocate slot from MailSlotTable
+   while (MailSlotTable[j].is_free != 0)
+   {
+      j++;
+      //halt(1) overflow of MailSlotTable, no free space
+      if (j >= MAXSLOTS)
+      {
+         if (DEBUG2 && debugflag2)
+            {
+               console ("MboxSend(): Error. Overflow of MailSlotTable.\n");
+            }
+         halt(1);
+      }
+   }
+
+   //initialize the mail_slot struct
+   MailSlotTable[j].is_free = 1;
+   MailSlotTable[j].mbox_id = MailBoxTable[i].mbox_id;
+   memcpy(MailSlotTable[j].message, msg_ptr, msg_size);
+
+   //maintain linked list of mailslots
+   insert_mail_slot(i, j);
+
+   //make necessary changes to the mailbox struct
+   MailBoxTable[i].num_used_slots++;
 
 } /* MboxSend */
 
@@ -314,3 +349,30 @@ void check_kernel_mode()
    // return if in kernel mode
    return;
 } /* check_kernel_mode */
+
+
+/* -------------------------------------------------------------------------
+   Name - insert_mail_slot()
+   Purpose - maintain the linked list of mailslots in the mbox and mailslot
+             structs
+   Parameters - int mailbox, int mailslot
+   Returns - Nothing
+   --------------------------------------------------------------------------*/
+void insert_mail_slot(int mailbox, int mailslot)
+{
+   slot_ptr walker;
+   walker = MailBoxTable[mailbox].slot_ptr;
+   if (walker == NULL)
+   {
+      MailBoxTable[mailbox].slot_ptr = &MailSlotTable[mailslot];
+   }
+   else
+   {
+      while (walker != NULL)
+      {
+         walker = walker->next_slot_ptr;
+      }
+      walker->next_slot_ptr = &MailSlotTable[mailslot];
+   }
+   return;
+} /* insert_mail_slot */
