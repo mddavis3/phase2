@@ -32,6 +32,9 @@ void disableInterrupts(void);          //added by Michael for test00
 int check_io(void);                    //added by Michael for test00
 void check_kernel_mode(void);          //added by Michael for start1
 void insert_mail_slot(int, int);       //added for MboxSend
+void insert_blocked_proc(int);         //added for MboxSend MboxReceive
+void remove_blocked_proc(int);         //added for MboxSend MboxReceive
+void mass_unbloxodus(int);             //added for MboxSend MboxRecieve
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -47,13 +50,13 @@ mbox_proc MboxProcs[MAXPROC];                               //added by Michael f
 int global_mbox_id;
 
 /* Dummy mailbox used for initialization */                 //added by Michael for start1
-mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL, NULL, NULL};
+mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 /* Dummy mailslot used for initialization */                //added by Michael for start1
-mail_slot dummy_slot = {0, NULL, NULL, NULL, NULL};
+mail_slot dummy_slot = {0, NULL, NULL, NULL, NULL, NULL};
 
 /* Dummy proc used for initialization */                    //added by Michael for start1
-mbox_proc dummy_proc = {NULL};
+mbox_proc dummy_proc = {NULL, NULL, NULL, NULL};
 
 /* -------------------------- Functions ----------------------------------- */
 
@@ -199,7 +202,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    /* Check for kernel mode */
    check_kernel_mode();
 
-   int i, j = 0;
+   int i = 0;
+   int j = 0;
 
    //check for the mailbox in the mailbox table
    while (MailBoxTable[i].mbox_id != mbox_id)
@@ -241,8 +245,16 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    //block the sender if there are no available slots
    if (MailBoxTable[i].num_used_slots >= MailBoxTable[i].num_slots)
    {
-      //block the sender cus it's full - REVIEW
-      block_me(MAILBOXFULL);
+      //throw the process into the blocked list on that mailbox
+      insert_blocked_proc(i);
+
+      //initialize the mbox_proc values
+      MboxProcs[getpid()%MAXPROC].pid = getpid();
+      MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
+      MboxProcs[getpid()%MAXPROC].blocked_how = MBOXFULL;
+
+      //block the sender cus it's full
+      block_me(MBOXFULL);
    }
    
    //once slot is available, allocate slot from MailSlotTable
@@ -253,9 +265,9 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
       if (j >= MAXSLOTS)
       {
          if (DEBUG2 && debugflag2)
-            {
-               console ("MboxSend(): Error. Overflow of MailSlotTable.\n");
-            }
+         {
+            console ("MboxSend(): Error. Overflow of MailSlotTable.\n");
+         }
          halt(1);
       }
    }
@@ -263,13 +275,19 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    //initialize the mail_slot struct
    MailSlotTable[j].is_free = 1;
    MailSlotTable[j].mbox_id = MailBoxTable[i].mbox_id;
-   memcpy(MailSlotTable[j].message, msg_ptr, msg_size);
+   memcpy(&MailSlotTable[j].message, msg_ptr, msg_size);
+   MailSlotTable[j].message_size = msg_size;
 
    //maintain linked list of mailslots
    insert_mail_slot(i, j);
 
    //make necessary changes to the mailbox struct
    MailBoxTable[i].num_used_slots++;
+
+   //unblock any receivers blocked due to mailbox empty
+   mass_unbloxodus(i);
+
+   return 0;
 
 } /* MboxSend */
 
@@ -287,6 +305,77 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 {
    /* Check for kernel mode */
    check_kernel_mode();
+
+   int i = 0;
+   int j = 0;
+   int message_size;
+
+   //check for the mailbox in the MailBoxTable
+   while (MailBoxTable[i].mbox_id != mbox_id)
+   {
+      i++;
+      //return -1 if mailbox is not in the mailbox table
+      if (i == MAXMBOX)
+      {
+         if (DEBUG2 && debugflag2)
+         {
+            console ("MboxReceive(): mailbox not found in the mailbox table. Return -1\n");
+         }
+         return (-1);
+      }
+   }
+
+   //check if the mail box has any messages available
+   if (MailBoxTable[i].num_used_slots == 0)
+   {
+      //block the receiver if there are no messages
+      if (DEBUG2 && debugflag2)
+         {
+            console ("MboxReceive(): mailbox has no messages. Block the reciever.\n");
+         }
+      block_me(MBOXEMPTY);
+      //throw the process into the blocked list of the mailbox
+   }
+
+   //check to see if the mailbox was released, return -3 if it was
+   
+   //check the length of the message
+   if (MailBoxTable[i].slot_ptr->message_size > msg_size)
+   {
+      //return -1 if the message is too big
+      if (DEBUG2 && debugflag2)
+         {
+            console ("MboxReceive(): message is too big for receiver's buffer. Return -1\n");
+         }
+      return (-1);
+   }
+   message_size = MailBoxTable[i].slot_ptr->message_size;
+
+   //copy the message from the mail slot to the receiver's message buffer
+   memcpy(msg_ptr, &MailBoxTable[i].slot_ptr->message, MailBoxTable[i].slot_ptr->message_size);
+
+   //release the mailbox slot
+   while (&MailSlotTable[j] != MailBoxTable[i].slot_ptr)
+   {
+      j++;
+   }
+   if (MailBoxTable[i].slot_ptr->next_slot_ptr == NULL)
+   {
+      MailBoxTable[i].slot_ptr = NULL;
+   }
+   else
+   {
+      MailBoxTable[i].slot_ptr = MailBoxTable[i].slot_ptr->next_slot_ptr;
+   }
+   MailSlotTable[j] = dummy_slot;
+
+   //decrement used_slots on mailbox
+   MailBoxTable[i].num_used_slots--;
+
+   //unblock any senders blocked due to full mailbox
+   mass_unbloxodus(i);
+   
+   return message_size;
 
 } /* MboxReceive */
 
@@ -361,6 +450,7 @@ void check_kernel_mode()
 void insert_mail_slot(int mailbox, int mailslot)
 {
    slot_ptr walker;
+   slot_ptr previous;
    walker = MailBoxTable[mailbox].slot_ptr;
    if (walker == NULL)
    {
@@ -370,9 +460,81 @@ void insert_mail_slot(int mailbox, int mailslot)
    {
       while (walker != NULL)
       {
+         previous = walker;
          walker = walker->next_slot_ptr;
       }
-      walker->next_slot_ptr = &MailSlotTable[mailslot];
+      previous->next_slot_ptr = &MailSlotTable[mailslot];
    }
    return;
 } /* insert_mail_slot */
+
+/* -------------------------------------------------------------------------
+   Name - insert_blocked_proc()
+   Purpose - insert proc to the linked list of blocked processes on a mailbox
+   Parameters - int mailbox
+   Returns - Nothing
+   --------------------------------------------------------------------------*/
+void insert_blocked_proc(int mailbox)
+{
+   mbox_proc_ptr walker;
+   mbox_proc_ptr previous;
+   int i = getpid()%MAXPROC;
+   walker = MailBoxTable[mailbox].proc_ptr;
+   if (walker == NULL)
+   {
+      MailBoxTable[mailbox].proc_ptr = &MboxProcs[i];
+   }
+   else
+   {
+      while (walker != NULL)
+      {
+         previous = walker;
+         walker = walker->next_proc_ptr;
+      }
+      previous->next_proc_ptr = &MboxProcs[i];
+   }
+   return;
+} /* insert_blocked_proc */
+
+/* -------------------------------------------------------------------------
+   Name - remove_blocked_proc()
+   Purpose - remove proc from the linked list of blocked processes on a mailbox
+             updates the data fields of the mbox proc
+   Parameters - int mailbox
+   Returns - Nothing
+   --------------------------------------------------------------------------*/
+void remove_blocked_proc(int mailbox)
+{
+   if (MailBoxTable[mailbox].proc_ptr->next_proc_ptr == NULL)
+   {
+      MailBoxTable[mailbox].proc_ptr = NULL;
+   }
+   else
+   {
+      MailBoxTable[mailbox].proc_ptr = MailBoxTable[mailbox].proc_ptr->next_proc_ptr;
+      MboxProcs[getpid()%MAXPROC].next_proc_ptr = NULL;
+   }
+
+   MboxProcs[getpid()%MAXPROC].blocked = UNBLOCKED;
+   MboxProcs[getpid()%MAXPROC].blocked_how = UNBLOCKED;
+
+   return;
+} /* remove_blocked_proc */
+
+/* -------------------------------------------------------------------------
+   Name - mass_unbloxodus()
+   Purpose - unblock all processes blocked on a mailbox
+   Parameters - int mailbox
+   Returns - Nothing
+   --------------------------------------------------------------------------*/
+void mass_unbloxodus(int mailbox)
+{
+   int pid;
+   while(MailBoxTable[mailbox].proc_ptr != NULL)
+   {
+      pid = MailBoxTable[mailbox].proc_ptr->pid;
+      remove_blocked_proc(mailbox);
+      unblock_proc(pid);
+   }
+   return;
+} /* mass_unbloxodus */
