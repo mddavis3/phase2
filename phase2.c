@@ -495,8 +495,7 @@ void insert_mail_slot(int mailbox, int mailslot)
    --------------------------------------------------------------------------*/
 void insert_blocked_proc(int mailbox)
 {
-   //DEBUG PURPOSES TAKE OUT LATER ******************************
-   console("insert_blocked_proc() says: The value of mailbox parameter passed in is: %d\n\n",mailbox);
+  
    mbox_proc_ptr walker;
    mbox_proc_ptr previous;
    int i = getpid()%MAXPROC;
@@ -517,7 +516,7 @@ void insert_blocked_proc(int mailbox)
       previous->next_proc_ptr = &MboxProcs[i];
       
    }
-   console("\n MBox table slot %d is pointing at pid %d in the proctable. \n" , mailbox, i);
+  
    return;
 } /* insert_blocked_proc */
 
@@ -556,10 +555,7 @@ void remove_blocked_proc(int mailbox)
 void mass_unbloxodus(int mailbox)
 {
    int pid;
-      //*******************************print mbox blocked list and dump processes debug for test05 need to be removed*****************
-      console("The blocked list should have XXp2 in it due to being blocked on empty mbox\n");
-      dump_processes();
-   print_Mbox_Blocked_List(mailbox);
+     
   // while(MailBoxTable[mailbox].proc_ptr != NULL)
   // {
      if(MailBoxTable[mailbox].proc_ptr != NULL) //*********Made this change per Professor XU  She said only one proce at a time is unblocked
@@ -568,7 +564,7 @@ void mass_unbloxodus(int mailbox)
       remove_blocked_proc(mailbox);
       unblock_proc(pid);
      }
-   print_Mbox_Blocked_List(mailbox);
+  
  //  }
    return;
 } /* mass_unbloxodus */
@@ -587,7 +583,7 @@ void mass_unbloxodus(int mailbox)
 
       //Print all the Processes blocked on this mailbox.
          walker = MailBoxTable[mailbox_tbl_slot].proc_ptr;  //set walker to proc_ptr of mailbox found on mbox table earlier
-         console("==================== Blocked List on Mailbox ===========================================\n\n");
+         console("\n\n==================== Blocked List on Mailbox ===========================================\n\n");
          console ("Mbox Spot in Table: %d  MboxID: %d\n", mailbox_tbl_slot,  MailBoxTable[mailbox_tbl_slot].mbox_id);
          if (walker == NULL)
          {
