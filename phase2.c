@@ -35,7 +35,7 @@ void insert_mail_slot(int, int);       //added for MboxSend
 void insert_blocked_proc(int);         //added for MboxSend MboxReceive
 void remove_blocked_proc(int);         //added for MboxSend MboxReceive
 void mass_unbloxodus(int);             //added for MboxSend MboxRecieve
-
+ void print_Mbox_Blocked_List(int);     //added for debug purposes
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -245,16 +245,25 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    //block the sender if there are no available slots
    if (MailBoxTable[i].num_used_slots >= MailBoxTable[i].num_slots)
    {
-      //throw the process into the blocked list on that mailbox
-      insert_blocked_proc(i);
 
-      //initialize the mbox_proc values
+      //initialize the mbox_proc values ***switched this block to go first so the MboxProc table gets populated first before
       MboxProcs[getpid()%MAXPROC].pid = getpid();
       MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
       MboxProcs[getpid()%MAXPROC].blocked_how = MBOXFULL;
 
-      //block the sender cus it's full
-      block_me(MBOXFULL);
+
+      //throw the process into the blocked list on that mailbox
+      insert_blocked_proc(i);
+
+     
+
+      //block the sender cus it's full if blockme returns -1 then the process was zapped during its block_me call so return -3 REVIEW
+     if ( block_me(MBOXFULL) == -1)
+     {
+        return -3;
+     }
+     
+
    }
    
    //once slot is available, allocate slot from MailSlotTable
@@ -333,8 +342,18 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
          {
             console ("MboxReceive(): mailbox has no messages. Block the reciever.\n");
          }
+      
+      //Add to MboxProc Table
+       //initialize the mbox_proc values ***switched this block to go first so the MboxProc table gets populated first before
+      MboxProcs[getpid()%MAXPROC].pid = getpid();
+      MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
+      MboxProcs[getpid()%MAXPROC].blocked_how = MBOXEMPTY;
+
+
+
+      //throw the process into the blocked list of the mailbox and then block process
+      insert_blocked_proc(i);
       block_me(MBOXEMPTY);
-      //throw the process into the blocked list of the mailbox
    }
 
    //check to see if the mailbox was released, return -3 if it was
@@ -471,18 +490,22 @@ void insert_mail_slot(int mailbox, int mailslot)
 /* -------------------------------------------------------------------------
    Name - insert_blocked_proc()
    Purpose - insert proc to the linked list of blocked processes on a mailbox
-   Parameters - int mailbox
+   Parameters - int mailbox table slot
    Returns - Nothing
    --------------------------------------------------------------------------*/
 void insert_blocked_proc(int mailbox)
 {
+   //DEBUG PURPOSES TAKE OUT LATER ******************************
+   console("insert_blocked_proc() says: The value of mailbox parameter passed in is: %d\n\n",mailbox);
    mbox_proc_ptr walker;
    mbox_proc_ptr previous;
    int i = getpid()%MAXPROC;
    walker = MailBoxTable[mailbox].proc_ptr;
    if (walker == NULL)
    {
+     
       MailBoxTable[mailbox].proc_ptr = &MboxProcs[i];
+    
    }
    else
    {
@@ -492,7 +515,9 @@ void insert_blocked_proc(int mailbox)
          walker = walker->next_proc_ptr;
       }
       previous->next_proc_ptr = &MboxProcs[i];
+      
    }
+   console("\n MBox table slot %d is pointing at pid %d in the proctable. \n" , mailbox, i);
    return;
 } /* insert_blocked_proc */
 
@@ -517,6 +542,7 @@ void remove_blocked_proc(int mailbox)
 
    MboxProcs[getpid()%MAXPROC].blocked = UNBLOCKED;
    MboxProcs[getpid()%MAXPROC].blocked_how = UNBLOCKED;
+   
 
    return;
 } /* remove_blocked_proc */
@@ -530,11 +556,50 @@ void remove_blocked_proc(int mailbox)
 void mass_unbloxodus(int mailbox)
 {
    int pid;
-   while(MailBoxTable[mailbox].proc_ptr != NULL)
-   {
+      //*******************************print mbox blocked list and dump processes debug for test05 need to be removed*****************
+      console("The blocked list should have XXp2 in it due to being blocked on empty mbox\n");
+      dump_processes();
+   print_Mbox_Blocked_List(mailbox);
+  // while(MailBoxTable[mailbox].proc_ptr != NULL)
+  // {
+     if(MailBoxTable[mailbox].proc_ptr != NULL) //*********Made this change per Professor XU  She said only one proce at a time is unblocked
+     {                                          // left the while loop but commented it out so you can see what it was and if im wrong we can fix  
       pid = MailBoxTable[mailbox].proc_ptr->pid;
       remove_blocked_proc(mailbox);
       unblock_proc(pid);
-   }
+     }
+   print_Mbox_Blocked_List(mailbox);
+ //  }
    return;
 } /* mass_unbloxodus */
+
+/* -------------------------------------------------------------------------
+   Name - print_Mbox_Blocked_Lists(int mailbox)
+   Purpose - print all the blocked procs on a mailbox for debug prurposes 
+   Parameters - int mailbox table slot
+   Returns - Nothing
+   --------------------------------------------------------------------------*/
+   void print_Mbox_Blocked_List(int mailbox_tbl_slot)
+   {
+     
+      mbox_proc_ptr walker;
+      
+
+      //Print all the Processes blocked on this mailbox.
+         walker = MailBoxTable[mailbox_tbl_slot].proc_ptr;  //set walker to proc_ptr of mailbox found on mbox table earlier
+         console("==================== Blocked List on Mailbox ===========================================\n\n");
+         console ("Mbox Spot in Table: %d  MboxID: %d\n", mailbox_tbl_slot,  MailBoxTable[mailbox_tbl_slot].mbox_id);
+         if (walker == NULL)
+         {
+            console("No Blocked Procs on this mailbox\n\n"); // no blocked list on this mail box 
+         }
+
+         while(walker != NULL)
+         {
+            
+            console ("Blocked Proc Id: %d\n", walker->pid );
+            walker = walker->next_proc_ptr;
+         }
+         console("\n========================================================================================\n\n");
+
+   }/*print_Mbox_Blocked_List*/
