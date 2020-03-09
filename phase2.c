@@ -27,15 +27,21 @@
 /* ------------------------- Prototypes ----------------------------------- */
 int start1 (char *);
 extern int start2 (char *);
+int MboxCreate(int, int);
+int MboxSend(int, void *, int);
+int MboxReceive(int, void *, int);
+int MboxRelease(int);
 static void enableInterrupts(void);    //added by Michael for test00
 void disableInterrupts(void);          //added by Michael for test00
 int check_io(void);                    //added by Michael for test00
 void check_kernel_mode(void);          //added by Michael for start1
 void insert_mail_slot(int, int);       //added for MboxSend
+void remove_mail_slot(int);
 void insert_blocked_proc(int);         //added for MboxSend MboxReceive
 void remove_blocked_proc(int);         //added for MboxSend MboxReceive
 void mass_unbloxodus(int);             //added for MboxSend MboxRecieve
- void print_Mbox_Blocked_List(int);     //added for debug purposes
+void unbloxodus(int);
+void print_Mbox_Blocked_List(int);     //added for debug purposes
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -50,7 +56,7 @@ mbox_proc MboxProcs[MAXPROC];                               //added by Michael f
 int global_mbox_id;
 
 /* Dummy mailbox used for initialization */                 //added by Michael for start1
-mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 /* Dummy mailslot used for initialization */                //added by Michael for start1
 mail_slot dummy_slot = {0, NULL, NULL, NULL, NULL, NULL};
@@ -179,6 +185,7 @@ int MboxCreate(int slots, int slot_size)
    MailBoxTable[i].num_slots = slots;
    MailBoxTable[i].max_slot_size = slot_size;
    MailBoxTable[i].num_used_slots = 0;
+   MailBoxTable[i].num_blocked_procs = 0;
 
    //increment global int mbox_id
    //return >= 0 as the mailbox id number
@@ -250,20 +257,18 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
       MboxProcs[getpid()%MAXPROC].pid = getpid();
       MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
       MboxProcs[getpid()%MAXPROC].blocked_how = MBOXFULL;
-
+      MailBoxTable[i].num_blocked_procs++;
 
       //throw the process into the blocked list on that mailbox
       insert_blocked_proc(i);
 
-     
-
       //block the sender cus it's full if blockme returns -1 then the process was zapped during its block_me call so return -3 REVIEW
-     if ( block_me(MBOXFULL) == -1)
-     {
-        return -3;
-     }
-     
-
+      //also if the mailbox was released return -3
+      if ( block_me(MBOXFULL) == -1 || MailBoxTable[i].status == RELEASED)
+      {
+         //add console error message here perhaps??? - REVIEW
+         return -3;
+      }
    }
    
    //once slot is available, allocate slot from MailSlotTable
@@ -293,8 +298,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
    //make necessary changes to the mailbox struct
    MailBoxTable[i].num_used_slots++;
 
-   //unblock any receivers blocked due to mailbox empty
-   mass_unbloxodus(i);
+   //unblock one receiver blocked due to mailbox empty
+   unbloxodus(i);
 
    return 0;
 
@@ -316,7 +321,6 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
    check_kernel_mode();
 
    int i = 0;
-   int j = 0;
    int message_size;
 
    //check for the mailbox in the MailBoxTable
@@ -348,15 +352,17 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
       MboxProcs[getpid()%MAXPROC].pid = getpid();
       MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
       MboxProcs[getpid()%MAXPROC].blocked_how = MBOXEMPTY;
-
-
+      MailBoxTable[i].num_blocked_procs++;
 
       //throw the process into the blocked list of the mailbox and then block process
+      //if process was zapped while blocked or mailbox was released return -3
       insert_blocked_proc(i);
-      block_me(MBOXEMPTY);
+      if (block_me(MBOXEMPTY) == -1 || MailBoxTable[i].status == RELEASED)
+      {
+         //add a console error message here perhaps??? - REVIEW
+         return -3;
+      }
    }
-
-   //check to see if the mailbox was released, return -3 if it was
    
    //check the length of the message
    if (MailBoxTable[i].slot_ptr->message_size > msg_size)
@@ -374,29 +380,68 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
    memcpy(msg_ptr, &MailBoxTable[i].slot_ptr->message, MailBoxTable[i].slot_ptr->message_size);
 
    //release the mailbox slot
-   while (&MailSlotTable[j] != MailBoxTable[i].slot_ptr)
-   {
-      j++;
-   }
-   if (MailBoxTable[i].slot_ptr->next_slot_ptr == NULL)
-   {
-      MailBoxTable[i].slot_ptr = NULL;
-   }
-   else
-   {
-      MailBoxTable[i].slot_ptr = MailBoxTable[i].slot_ptr->next_slot_ptr;
-   }
-   MailSlotTable[j] = dummy_slot;
+   remove_mail_slot(i);
 
-   //decrement used_slots on mailbox
-   MailBoxTable[i].num_used_slots--;
-
-   //unblock any senders blocked due to full mailbox
-   mass_unbloxodus(i);
+   //unblock one sender blocked due to full mailbox
+   unbloxodus(i);
    
    return message_size;
 
 } /* MboxReceive */
+
+/* ------------------------------------------------------------------------
+   Name - MboxRelease
+   Purpose - releases a previously created mailbox
+   Parameters - mailbox id.
+   Returns - -3 if process was zapped while releasing the mailbox
+             -1 the mailbox ID is not a mailbox that is in use
+              0 successful completion
+   Side Effects - none.
+   ----------------------------------------------------------------------- */
+int MboxRelease(int mailboxID)
+{
+   int i = 0;
+
+   //mark mailbox as being released
+   //return -1 mailbox id is not a mailbox in use
+   while ( MailBoxTable[i].mbox_id != mailboxID)
+   {
+      i++;
+      if ( i >= MAXMBOX)
+      {
+         return -1;
+      }
+   }
+   MailBoxTable[i].status = RELEASED;
+
+   //reclaim the mailslots from the mailslot table
+   if (MailBoxTable[i].num_used_slots > 0)
+   {
+      while (MailBoxTable[i].num_used_slots > 0)
+      {
+         //release mailslots
+         remove_mail_slot(i);
+      }
+   }
+
+   //check for blocked procs and unblock them
+   if (MailBoxTable[i].num_blocked_procs > 0)
+   {
+      while (MailBoxTable[i].num_blocked_procs > 0)
+      {
+         mass_unbloxodus(i);
+      }
+   }
+
+   //return -3 if process was zapped while releasing the mailbox
+   //
+   //
+   //
+   //DO MORE STUFF WITH BLOCKED PROCS ON MAILBOX??? - REVIEW
+
+   //return 0 if successful
+   return 0;
+} /* MboxRelease */
 
 /* --------------------------------------------------------------------------------
    Name - enableInterrupts()
@@ -488,6 +533,36 @@ void insert_mail_slot(int mailbox, int mailslot)
 } /* insert_mail_slot */
 
 /* -------------------------------------------------------------------------
+   Name - remove_mail_slot()
+   Purpose - maintain the linked list of mailslots in the mbox and mailslot
+             structs, release mailbox slots from mailslottable
+   Parameters - int mbox_index
+   Returns - Nothing
+   --------------------------------------------------------------------------*/
+void remove_mail_slot(int mbox_index)
+{
+   int j = 0;
+   while (&MailSlotTable[j] != MailBoxTable[mbox_index].slot_ptr)
+   {
+      j++;
+   }
+   if (MailBoxTable[mbox_index].slot_ptr->next_slot_ptr == NULL)
+   {
+      MailBoxTable[mbox_index].slot_ptr = NULL;
+   }
+   else
+   {
+      MailBoxTable[mbox_index].slot_ptr = MailBoxTable[mbox_index].slot_ptr->next_slot_ptr;
+   }
+   MailSlotTable[j] = dummy_slot;
+
+   //decrement used_slots on mailbox
+   MailBoxTable[mbox_index].num_used_slots--;
+
+   return;
+} /* remove_mail_slot */
+
+/* -------------------------------------------------------------------------
    Name - insert_blocked_proc()
    Purpose - insert proc to the linked list of blocked processes on a mailbox
    Parameters - int mailbox table slot
@@ -556,18 +631,38 @@ void mass_unbloxodus(int mailbox)
 {
    int pid;
      
-  // while(MailBoxTable[mailbox].proc_ptr != NULL)
-  // {
-     if(MailBoxTable[mailbox].proc_ptr != NULL) //*********Made this change per Professor XU  She said only one proce at a time is unblocked
-     {                                          // left the while loop but commented it out so you can see what it was and if im wrong we can fix  
+   while(MailBoxTable[mailbox].proc_ptr != NULL)
+   {                                           
       pid = MailBoxTable[mailbox].proc_ptr->pid;
+      MailBoxTable[mailbox].num_blocked_procs--;
       remove_blocked_proc(mailbox);
       unblock_proc(pid);
-     }
-  
- //  }
+   }
    return;
 } /* mass_unbloxodus */
+
+
+/* -------------------------------------------------------------------------
+   Name - unbloxodus()
+   Purpose - unblock one process blocked on a mailbox
+   Parameters - int mailbox
+   Returns - Nothing
+   --------------------------------------------------------------------------*/
+void unbloxodus(int mailbox)
+{
+   int pid;
+     
+   if(MailBoxTable[mailbox].proc_ptr != NULL) 
+   {                                            
+      pid = MailBoxTable[mailbox].proc_ptr->pid;
+      MailBoxTable[mailbox].num_blocked_procs--;
+      remove_blocked_proc(mailbox);
+      unblock_proc(pid);
+   }
+   return;
+} /* unbloxodus */
+
+
 
 /* -------------------------------------------------------------------------
    Name - print_Mbox_Blocked_Lists(int mailbox)
