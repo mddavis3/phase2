@@ -4,14 +4,15 @@
 #define INACTIVE 0            //added by Michael for MboxSend
 #define MBOXFULL 11           //added by Michael for MboxSend
 #define MBOXEMPTY 12          //added for MboxReceive
+#define MBOXZERO 13           //added for zero-slot mailboxes
 #define BLOCKED 1
 #define UNBLOCKED 0
 
 typedef struct mail_slot *slot_ptr;
 typedef struct mailbox mail_box;
 typedef struct mbox_proc *mbox_proc_ptr;
-typedef struct mail_slot mail_slot;       //added by Michael for start1 - REVIEW
-typedef struct mbox_proc mbox_proc;       //added by Michael for start1 - REVIEW
+typedef struct mail_slot mail_slot;       //added by Michael for start1
+typedef struct mbox_proc mbox_proc;       //added by Michael for start1
 
 struct mailbox {
    int            is_free;             //added by Michael for MboxCreate
@@ -54,5 +55,7 @@ struct mbox_proc {               //added by Michael from developement_slides1
    int            blocked_how;   //indication of whether process is blocked on a send or a receive
    int            blocked;       //indication of whether process is blocked
    mbox_proc_ptr  next_proc_ptr; //pointing to the next blocked process
+   int            message_size;
+   char           message;
    /* other items as needed */
 };

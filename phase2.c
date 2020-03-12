@@ -27,10 +27,6 @@
 /* ------------------------- Prototypes ----------------------------------- */
 int start1 (char *);
 extern int start2 (char *);
-int MboxCreate(int, int);
-int MboxSend(int, void *, int);
-int MboxReceive(int, void *, int);
-int MboxRelease(int);
 static void enableInterrupts(void);    //added by Michael for test00
 void disableInterrupts(void);          //added by Michael for test00
 int check_io(void);                    //added by Michael for test00
@@ -62,7 +58,7 @@ mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 mail_slot dummy_slot = {0, NULL, NULL, NULL, NULL, NULL};
 
 /* Dummy proc used for initialization */                    //added by Michael for start1
-mbox_proc dummy_proc = {NULL, NULL, NULL, NULL};
+mbox_proc dummy_proc = {NULL, NULL, NULL, NULL, NULL, NULL};
 
 /* -------------------------- Functions ----------------------------------- */
 
@@ -76,7 +72,7 @@ mbox_proc dummy_proc = {NULL, NULL, NULL, NULL};
    ----------------------------------------------------------------------- */
 int start1(char *arg)
 {
-   int kid_pid, status;
+   int kid_pid, status, mbox_id;
 
    if (DEBUG2 && debugflag2)
    {
@@ -91,7 +87,8 @@ int start1(char *arg)
 
    /* Initialize the mail box table, slots, & other data structures. - completed
     * Initialize the Process Table - completed
-    * Create I/O mailboxes and Initialize int_vec and sys_vec arrays, 
+    * Create I/O mailboxes - completed
+    * Initialize int_vec and sys_vec arrays 
     * allocate mailboxes for interrupt handlers.
     */
 
@@ -114,6 +111,12 @@ int start1(char *arg)
    for (int i = 0; i < MAXPROC; i++)
    {
       MboxProcs[i] = dummy_proc;
+   }
+
+   /* Allocate the 7 I/O Mailboxes */
+   for ( int i = 0; i < 7; i++)
+   {
+      mbox_id = MboxCreate(0, MAX_MESSAGE);   
    }
 
    /* Enable interrupts */
@@ -189,8 +192,8 @@ int MboxCreate(int slots, int slot_size)
 
    //increment global int mbox_id
    //return >= 0 as the mailbox id number
-   global_mbox_id++;
-   MailBoxTable[i].mbox_id = global_mbox_id;
+   //global_mbox_id++;
+   MailBoxTable[i].mbox_id = global_mbox_id++;
    return MailBoxTable[i].mbox_id;
 
 } /* MboxCreate */
@@ -248,12 +251,61 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
       return (-1);
    }
 
+   //check if zero-slot mailbox
+   if (MailBoxTable[i].num_slots == 0)
+   {
+      //check if mailbox has blocked receiver
+      if (MailBoxTable[i].proc_ptr == NULL)
+      {
+         //no blocked receiver, block the sender
+         //add to MboxProc Table
+         //initialize the mbox_proc values
+         MboxProcs[getpid()%MAXPROC].pid = getpid();
+         MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
+         MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZERO;
+         MailBoxTable[i].num_blocked_procs++;
+         insert_blocked_proc(i);
+         block_me(MBOXZERO); 
+      }
+      
+      if (MailBoxTable[i].proc_ptr != NULL)
+      {
+         //the receiver is blocked
+         //check the size of receiver's buffer
+         if (MailBoxTable[i].proc_ptr->message_size < msg_size)
+         {
+            //return -1 if the message is too big
+            if (DEBUG2 && debugflag2)
+            {
+               console ("MboxSend(): message is too big for receiver's buffer. Return -1\n");
+            }
+            return (-1);
+         }
+
+         //assign message size to the recieving process
+         //copy the message to the receiver
+         MailBoxTable[i].proc_ptr->message_size = msg_size;
+         memcpy(&MailBoxTable[i].proc_ptr->message, msg_ptr, msg_size);
+
+         //unblock receiver
+         unbloxodus(i);
+
+         //return 0 for success
+         return 0;
+      }
+      
+      //consider other cases here...
+      return 0;
+   }
+
+
    //check to see if there are available mail slots
    //block the sender if there are no available slots
-   if (MailBoxTable[i].num_used_slots >= MailBoxTable[i].num_slots)
+   //this applies only to nonzero-slot mailboxes
+   if (MailBoxTable[i].num_used_slots >= MailBoxTable[i].num_slots && MailBoxTable[i].num_slots > 0)
    {
 
-      //initialize the mbox_proc values ***switched this block to go first so the MboxProc table gets populated first before
+      //initialize the mbox_proc values
       MboxProcs[getpid()%MAXPROC].pid = getpid();
       MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
       MboxProcs[getpid()%MAXPROC].blocked_how = MBOXFULL;
@@ -339,16 +391,17 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
    }
 
    //check if the mail box has any messages available
-   if (MailBoxTable[i].num_used_slots == 0)
+   //this applies only for nonzero-slot mailboxes
+   if (MailBoxTable[i].num_used_slots == 0 && MailBoxTable[i].num_slots > 0)
    {
       //block the receiver if there are no messages
       if (DEBUG2 && debugflag2)
-         {
-            console ("MboxReceive(): mailbox has no messages. Block the reciever.\n");
-         }
+      {
+         console ("MboxReceive(): mailbox has no messages. Block the reciever.\n");
+      }
       
       //Add to MboxProc Table
-       //initialize the mbox_proc values ***switched this block to go first so the MboxProc table gets populated first before
+      //initialize the mbox_proc values
       MboxProcs[getpid()%MAXPROC].pid = getpid();
       MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
       MboxProcs[getpid()%MAXPROC].blocked_how = MBOXEMPTY;
@@ -362,6 +415,53 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
          //add a console error message here perhaps??? - REVIEW
          return -3;
       }
+   }
+
+   //check for zero-slot mailbox
+   if (MailBoxTable[i].num_slots == 0)
+   {
+      //check if mailbox has blocked sender
+      if (MailBoxTable[i].proc_ptr == NULL)
+      {
+         //no blocked sender, block the receiver
+         //add to MboxProc Table
+         //initialize the mbox_proc values
+         MboxProcs[getpid()%MAXPROC].pid = getpid();
+         MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
+         MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZERO;
+         MailBoxTable[i].num_blocked_procs++;
+         insert_blocked_proc(i);
+         block_me(MBOXZERO); 
+      }
+      
+      if (MailBoxTable[i].proc_ptr != NULL)
+      {
+         //the sender is blocked
+         //check the size
+         if (MailBoxTable[i].proc_ptr->message_size > msg_size)
+         {
+            //return -1 if the message is too big
+            if (DEBUG2 && debugflag2)
+            {
+               console ("MboxReceive(): message is too big for receiver's buffer. Return -1\n");
+            }
+            return (-1);
+         }
+
+         //copy the message from sender
+         message_size = MailBoxTable[i].proc_ptr->message_size;
+         memcpy(msg_ptr, &MailBoxTable[i].proc_ptr->message, message_size);
+
+         //unblock sender
+         unbloxodus(i);
+
+         //return the message_size
+         return message_size;
+      }
+      
+      //the message was copied to the buffer by the sender
+      //do a separate return here
+      return MboxProcs[getpid()%MAXPROC].message_size;
    }
    
    //check the length of the message
@@ -377,7 +477,7 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
    message_size = MailBoxTable[i].slot_ptr->message_size;
 
    //copy the message from the mail slot to the receiver's message buffer
-   memcpy(msg_ptr, &MailBoxTable[i].slot_ptr->message, MailBoxTable[i].slot_ptr->message_size);
+   memcpy(msg_ptr, &MailBoxTable[i].slot_ptr->message, message_size);
 
    //release the mailbox slot
    remove_mail_slot(i);
@@ -443,6 +543,179 @@ int MboxRelease(int mailboxID)
    return 0;
 } /* MboxRelease */
 
+/* ------------------------------------------------------------------------
+   Name - MboxCondSend
+   Purpose - Put a message into a slot for the indicated mailbox.
+   Parameters - mailbox id, pointer to data of msg, # of bytes in msg.
+   Returns - -3 if process is zap'd
+             -2 if mailbox is full, message not sent, or no mailbox slots
+                available
+             -1 if illegal values given as arguments
+              0 if message sent successfully
+   Side Effects - none.
+   ----------------------------------------------------------------------- */
+int MboxCondSend(int mailboxID, void *message, int message_size)
+{
+   /* Check for kernel mode */
+   check_kernel_mode();
+
+   int i = 0;
+   int j = 0;
+
+   //check for the mailbox in the mailbox table
+   while (MailBoxTable[i].mbox_id != mailboxID)
+   {
+      i++;
+      //return -1 if mailbox is not in the mailbox table
+      if (i == MAXMBOX)
+      {
+         if (DEBUG2 && debugflag2)
+         {
+            console ("MboxCondSend(): mailbox not found in the mailbox table. Return -1\n");
+         }
+         return (-1);
+      }
+   }
+
+   //return -1 if message size is too large
+   if (message_size > MailBoxTable[i].max_slot_size)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("MboxCondSend(): message size is too large. Return -1\n");
+      }
+      return (-1);
+   }
+
+   //check if there are any unused slots, return -2 if not
+   if (MailBoxTable[i].num_used_slots >= MailBoxTable[i].num_slots)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("MboxCondSend(): There are no unused mailbox slots. Return -2\n");
+      }
+      return (-2);
+   }
+
+   //once slot is available, allocate slot from MailSlotTable
+   while (MailSlotTable[j].is_free != 0)
+   {
+      j++;
+      //return -2 if no slots available in MailSlotTable
+      if (j >= MAXSLOTS)
+      {
+         if (DEBUG2 && debugflag2)
+         {
+            console ("MboxCondSend(): No slots available in MailSlotTable.\n");
+         }
+         return (-2);
+      }
+   }
+
+   //initialize the mail_slot struct
+   MailSlotTable[j].is_free = 1;
+   MailSlotTable[j].mbox_id = MailBoxTable[i].mbox_id;
+   memcpy(&MailSlotTable[j].message, message, message_size);
+   MailSlotTable[j].message_size = message_size;
+
+   //maintain linked list of mailslots
+   insert_mail_slot(i, j);
+
+   //make necessary changes to the mailbox struct
+   MailBoxTable[i].num_used_slots++;
+
+   //unblock one receiver blocked due to mailbox empty
+   unbloxodus(i);
+
+   //check if zap'd
+   if (is_zapped() == 1)
+   {
+      //return -3 if zap'd
+      return -3;
+   }
+   
+   //successful return
+   return 0;
+} /* MboxCondSend */
+
+/* ------------------------------------------------------------------------
+   Name - MboxCondReceive
+   Purpose - Put a message into a slot for the indicated mailbox.
+   Parameters - mailbox id, pointer to data of msg, # of bytes in buffer.
+   Returns - -3 if process is zap'd
+             -2 if mailbox empty or no message to receive
+             -1 if illegal values
+              0 if successful
+   Side Effects - none.
+----------------------------------------------------------------------- */
+int MboxCondReceive(int mailboxID, void *message, int max_message_size)
+{
+   /* Check for kernel mode */
+   check_kernel_mode();
+
+   int i = 0;
+   int message_size;
+
+   //check for the mailbox in the MailBoxTable
+   while (MailBoxTable[i].mbox_id != mailboxID)
+   {
+      i++;
+      //return -1 if mailbox is not in the mailbox table
+      if (i == MAXMBOX)
+      {
+         if (DEBUG2 && debugflag2)
+         {
+            console ("MboxCondReceive(): mailbox not found in the mailbox table. Return -1\n");
+         }
+         return (-1);
+      }
+   }
+
+   //check if the mailbox has any messages
+   if (MailBoxTable[i].num_used_slots == 0)
+   {
+      if (DEBUG2 && debugflag2)
+         {
+            console ("MboxCondReceive(): mailbox is empty. Return -2\n");
+         }
+      return (-2);
+   }
+
+   //check the length of the message
+   if (MailBoxTable[i].slot_ptr->message_size > max_message_size)
+   {
+      //return -1 if the message is too big
+      if (DEBUG2 && debugflag2)
+      {
+         console ("MboxCondReceive(): message is too big for receiver's buffer. Return -1\n");
+      }
+      return (-1);
+   }
+   message_size = MailBoxTable[i].slot_ptr->message_size;
+
+   //copy the message from the mail slot to the receiver's message buffer
+   memcpy(message, &MailBoxTable[i].slot_ptr->message, message_size);
+
+   //release the mailbox slot
+   remove_mail_slot(i);
+
+   //unblock one sender blocked due to full mailbox
+   unbloxodus(i);
+
+   //check if zap'd
+   if (is_zapped() == 1)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("MboxCondReceive(): message is zap'd bruh. Return -3\n");
+      }
+      return (-3);
+   }
+
+   //successful return
+   return 0;
+} /* MboxCondReceive */
+
 /* --------------------------------------------------------------------------------
    Name - enableInterrupts()
    Purpose - Enables the interrupts.
@@ -482,6 +755,56 @@ int check_io()
 {
    return 0;
 } /* check_io */
+
+
+/* -------------------------------------------------------------------------
+   Name - waitdevice()
+   Purpose - Does a MboxReceive operation on I/O mailboxes.
+   Parameters - None
+   Returns - -1 if the process was zap'd while waiting
+              0 if successful
+   --------------------------------------------------------------------------*/
+int waitdevice(int type, int unit, int *status)
+{
+   int result = 0;
+   int table_offset;	
+   // Sanity checks
+   if (type != CLOCK_DEV || type != DISK_DEV || type != TERM_DEV)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("waitdevice(): type is not compatible. halt(1).\n");
+      }
+      halt(1);
+   } 
+	//more code logic could be inserted before the below checking 
+	switch (type) 
+   {		
+      case CLOCK_DEV: 
+         result = MboxReceive(unit, status, sizeof(int)); 
+		   break;	
+      case DISK_DEV:
+         table_offset = 1;
+         unit = unit + table_offset; 
+		   result = MboxReceive(unit, status, sizeof(int)); 
+		   break;
+      case TERM_DEV: 
+         table_offset = 3;
+         unit = unit + table_offset;
+         result = MboxReceive(unit, status, sizeof(int)); 
+		   break; 
+		default: 
+		   printf("waitdevice(): bad type (%d). Halting...\n", type); 
+		   halt(1); 
+   } 
+
+   //if the process was zap'd, return -1
+   if (result == -3)
+   { 
+	    return -1;
+   } 
+   else return 0; 
+} /* waitdevice */
 
 /* -------------------------------------------------------------------------
    Name - check_kernel_mode()
