@@ -31,6 +31,10 @@ static void enableInterrupts(void);    //added by Michael for test00
 void disableInterrupts(void);          //added by Michael for test00
 int check_io(void);                    //added by Michael for test00
 void check_kernel_mode(void);          //added by Michael for start1
+void disk_handler(int, void *);
+void clock_handler2(int, void *);
+void terminal_handler(int, void *);
+void syscall_handler(int, void *);
 void insert_mail_slot(int, int);       //added for MboxSend
 void remove_mail_slot(int);
 void insert_blocked_proc(int);         //added for MboxSend MboxReceive
@@ -38,6 +42,7 @@ void remove_blocked_proc(int);         //added for MboxSend MboxReceive
 void mass_unbloxodus(int);             //added for MboxSend MboxRecieve
 void unbloxodus(int);
 void print_Mbox_Blocked_List(int);     //added for debug purposes
+static void nullsys(sysargs *);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -60,6 +65,12 @@ mail_slot dummy_slot = {0, NULL, NULL, NULL, NULL, NULL};
 /* Dummy proc used for initialization */                    //added by Michael for start1
 mbox_proc dummy_proc = {NULL, NULL, NULL, NULL, NULL, NULL};
 
+/* define the variable for the interrupt vector declared by USLOSS */
+void(*int_vec[NUM_INTS])(int dev, void * unit);
+
+/* define the variable for the system call vector declared by USLOSS */
+void(*sys_vec[MAXSYSCALLS])(sysargs *args);
+
 /* -------------------------- Functions ----------------------------------- */
 
 /* ------------------------------------------------------------------------
@@ -72,7 +83,7 @@ mbox_proc dummy_proc = {NULL, NULL, NULL, NULL, NULL, NULL};
    ----------------------------------------------------------------------- */
 int start1(char *arg)
 {
-   int kid_pid, status, mbox_id;
+   int kid_pid, status;
 
    if (DEBUG2 && debugflag2)
    {
@@ -116,7 +127,21 @@ int start1(char *arg)
    /* Allocate the 7 I/O Mailboxes */
    for ( int i = 0; i < 7; i++)
    {
-      mbox_id = MboxCreate(0, MAX_MESSAGE);   
+      MboxCreate(0, MAX_MESSAGE);   
+   }
+
+   /* Initialize the interrupt handlers */
+   int_vec[CLOCK_DEV] = clock_handler2;
+   int_vec[DISK_DEV] = disk_handler;
+   int_vec[TERM_DEV] = terminal_handler;
+
+   /* Initialize the sys_vec array */
+   int_vec[SYSCALL_INT] = syscall_handler;
+
+   // Initialize the system call handlers to nullsys  - REVIEW
+   for ( int i = 0; i < MAXSYSCALLS; i++)
+   {
+      sys_vec[i] = nullsys;
    }
 
    /* Enable interrupts */
@@ -429,6 +454,7 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
          MboxProcs[getpid()%MAXPROC].pid = getpid();
          MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
          MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZERO;
+         MboxProcs[getpid()%MAXPROC].message_size = msg_size;
          MailBoxTable[i].num_blocked_procs++;
          insert_blocked_proc(i);
          block_me(MBOXZERO); 
@@ -587,8 +613,55 @@ int MboxCondSend(int mailboxID, void *message, int message_size)
       return (-1);
    }
 
+   //check if zero-slot mailbox
+   if (MailBoxTable[i].num_slots == 0)
+   {
+      //check if mailbox has blocked receiver
+      if (MailBoxTable[i].proc_ptr == NULL)
+      {
+         //no blocked receiver, message not sent
+         //return -2
+         if (DEBUG2 && debugflag2)
+         {
+            console ("MboxCondSend(): no receiver waiting, message not sent. Return -2\n");
+         }
+         return (-2);
+      }
+      
+      //if there is a blocked process on mailbox
+      if (MailBoxTable[i].proc_ptr != NULL)
+      {
+         //the receiver is blocked
+         //check the size of receiver's buffer
+         if (MailBoxTable[i].proc_ptr->message_size < message_size)
+         {
+            //return -1 if the message is too big
+            if (DEBUG2 && debugflag2)
+            {
+               console ("MboxCondSend(): message is too big for receiver's buffer. Return -1\n");
+            }
+            return (-1);
+         }
+
+         //assign message size to the recieving process
+         //copy the message to the receiver
+         //MailBoxTable[i].proc_ptr->message_size = message_size;
+         memcpy(&MailBoxTable[i].proc_ptr->message, message, message_size); //some wonkiness here on test13 - memcpy weirdness???
+
+         //unblock receiver
+         unbloxodus(i);
+
+         //return 0 for success
+         return 0;
+      }
+      
+      //consider other cases here...
+      return 0;
+   }
+
    //check if there are any unused slots, return -2 if not
-   if (MailBoxTable[i].num_used_slots >= MailBoxTable[i].num_slots)
+   //for nonzero-slot mailboxes only
+   if (MailBoxTable[i].num_used_slots >= MailBoxTable[i].num_slots && MailBoxTable[i].num_slots > 0)
    {
       if (DEBUG2 && debugflag2)
       {
@@ -753,7 +826,25 @@ void disableInterrupts()
    --------------------------------------------------------------------------*/
 int check_io()
 {
-   return 0;
+   mbox_proc_ptr walker;
+   int flag = 0;
+   int i = 0;
+
+   while (i < 7)
+   {
+      walker = MailBoxTable[i].proc_ptr;
+      if (walker != NULL)
+      {
+         flag++;
+      }
+      i++;
+   }
+
+   if (flag > 0)
+   {
+      return 1;
+   }
+   else return 0;
 } /* check_io */
 
 /* -------------------------------------------------------------------------
@@ -762,21 +853,38 @@ int check_io()
    Parameters - int device type, pointer to which unit  
    Returns -
    --------------------------------------------------------------------------*/
+void disk_handler(int dev, void *punit)
+{
+   if (dev != DISK_DEV)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("disk_handler(): wrong device. return.\n");
+      }
+      return;   
+   }
 
-void disk_handler(int dev, void *punit){
+   int status;
+   int result;
+   int unit = (int)punit;
+   int table_offset = 1;
 
-int status;
-int result;
-int unit = (int)punit;
-/* Sanity checks */
-//make sure the arguments dev and unit are OK
-/*check the mailbox set-up for the disk unit. If not OK, return
-device input(DISK DEV, unit, &status);*/
-//result = MboxCondSend(disk_mbox[unit], &status, sizeof(status));
-//more checking on the return result
+   if (unit < 0 && unit > 1)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("disk_handler(): unit is out of range. return.\n");
+      }
+      return;   
+   }
+   
+   /*check the mailbox set-up for the disk unit. If not OK, return */
+   device_input(DISK_DEV, unit, &status);
+   result = MboxCondSend((unit+table_offset), &status, sizeof(status));
 
-}
- /* disk_handler */
+   //more checking on the return result
+   return;
+} /* disk_handler */
 
 
 /* -------------------------------------------------------------------------
@@ -785,27 +893,47 @@ device input(DISK DEV, unit, &status);*/
    Parameters - int device type, pointer to which unit 
    Returns - 
    --------------------------------------------------------------------------*/
-
-   void clock_handler2(int dev, void *punit){
-
-       //clock_ticker is static so it keeps accumulating every call of clock_handler2 while program is being ran.
-      static int clock_ticker = 0;   
-      int dummy_value = 0; //for dummy message to send to anybody receiving on the clock mailbox
-
-      //add a 20ms tick to clock_ticker
-      clock_ticker = clock_ticker + CLOCK_MS;
-      //check if 5 interrupts have happened
-      if (clock_ticker % 100 == 0)
+void clock_handler2(int dev, void *punit)
+{
+   if (dev != CLOCK_DEV)
+   {
+      if (DEBUG2 && debugflag2)
       {
-            //Five interrupts have occured for a total of 100ms do a MboxCondSend to clock mailbox
-            MboxCondSend(CLOCK_DEV, &dummy_value, sizeof(int)); //REVIEW THIS
-
-            //Call timeslice to kick out current process if need be.
-            time_slice();
+         console ("clock_handler2(): wrong device. return.\n");
       }
+      return;   
+   }
+
+   if (DEBUG2 && debugflag2)
+   {
+      console ("clock_handler2(): confirmed entry. target acquired.\n");
+   }
+
+   //clock_ticker is static so it keeps accumulating every call of clock_handler2 while program is being ran.
+   static int clock_ticker = 0;   
+   int dummy_value = 0; //for dummy message to send to anybody receiving on the clock mailbox
+
+   //add a 20ms tick to clock_ticker
+   clock_ticker = clock_ticker + CLOCK_MS;
+
+   //check if 5 interrupts have happened
+   if (clock_ticker % 100 == 0)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("clock_handler2(): sending message.\n");
+      }
+
+      //Five interrupts have occured for a total of 100ms do a MboxCondSend to clock mailbox
+      MboxCondSend(CLOCK_DEV, &dummy_value, sizeof(int)); //REVIEW THIS
       
-   
-   }/* clock_handler2*/
+
+      //Call timeslice to kick out current process if need be.
+      time_slice();
+   }
+
+   return;
+} /* clock_handler2*/
 
 
 /* -------------------------------------------------------------------------
@@ -814,13 +942,67 @@ device input(DISK DEV, unit, &status);*/
    Parameters - int device type, pointer to which unit 
    Returns - 
    --------------------------------------------------------------------------*/
+void terminal_handler(int dev, void *punit)
+{
+   if (dev != TERM_DEV)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("terminal_handler(): wrong device. return.\n");
+      }
+      return;   
+   }
 
-   void terminal_handler(int dev, void *punit){
+   int status;
+   int result;
+   int unit = (int)punit;
+   int table_offset = 3;
 
-      //do stuff
-   }/* terminal_handler*/
+   if (unit < 0 && unit > 3)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("terminal_handler(): unit is out of range. return.\n");
+      }
+      return;   
+   }
+   
+   /*check the mailbox set-up for the disk unit. If not OK, return */
+   device_input(TERM_DEV, unit, &status);
+   result = MboxCondSend((unit+table_offset), &status, sizeof(status));
 
+   //more checking on the return result
+   return;
+} /* terminal_handler*/
 
+/* -------------------------------------------------------------------------
+   Name - syscall_handler()
+   Purpose - 
+   Parameters - 
+   Returns -
+   --------------------------------------------------------------------------*/
+void syscall_handler(int dev, void *unit)
+{
+   sysargs *sys_ptr;
+
+   sys_ptr = (sysargs *) unit;
+
+   // Sanity check: if the interrupt is not SYSCALL_INT, halt(1)
+   if (dev != SYSCALL_INT)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("syscall_handler(): Interrupt is not SYSCALL_INT. halt(1).\n");
+      }
+      halt(1);
+   }
+   /* check what system: if the call is not in the range between 0 and MAXSYSCALLS, , halt(1) */ 
+
+	/* Now it is time to call the appropriate system call handler */ 
+	sys_vec[sys_ptr->number](sys_ptr);
+
+   return;
+} /* syscall_handler */
 
 /* -------------------------------------------------------------------------
    Name - waitdevice()
@@ -829,7 +1011,8 @@ device input(DISK DEV, unit, &status);*/
    Returns - -1 if the process was zap'd while waiting
               0 if successful
    --------------------------------------------------------------------------*/
-int waitdevice(int type, int unit, int *status){
+int waitdevice(int type, int unit, int *status)
+{
 
    int result = 0;
    int table_offset;	
@@ -1058,27 +1241,39 @@ void unbloxodus(int mailbox)
    Parameters - int mailbox table slot
    Returns - Nothing
    --------------------------------------------------------------------------*/
-   void print_Mbox_Blocked_List(int mailbox_tbl_slot)
-   {
+void print_Mbox_Blocked_List(int mailbox_tbl_slot)
+{
      
-      mbox_proc_ptr walker;
+   mbox_proc_ptr walker;
       
 
-      //Print all the Processes blocked on this mailbox.
-         walker = MailBoxTable[mailbox_tbl_slot].proc_ptr;  //set walker to proc_ptr of mailbox found on mbox table earlier
-         console("\n\n==================== Blocked List on Mailbox ===========================================\n\n");
-         console ("Mbox Spot in Table: %d  MboxID: %d\n", mailbox_tbl_slot,  MailBoxTable[mailbox_tbl_slot].mbox_id);
-         if (walker == NULL)
-         {
-            console("No Blocked Procs on this mailbox\n\n"); // no blocked list on this mail box 
-         }
+   //Print all the Processes blocked on this mailbox.
+      walker = MailBoxTable[mailbox_tbl_slot].proc_ptr;  //set walker to proc_ptr of mailbox found on mbox table earlier
+      console("\n\n==================== Blocked List on Mailbox ===========================================\n\n");
+      console ("Mbox Spot in Table: %d  MboxID: %d\n", mailbox_tbl_slot,  MailBoxTable[mailbox_tbl_slot].mbox_id);
+      if (walker == NULL)
+      {
+         console("No Blocked Procs on this mailbox\n\n"); // no blocked list on this mail box 
+      }
 
-         while(walker != NULL)
-         {
+      while(walker != NULL)
+      {
             
-            console ("Blocked Proc Id: %d\n", walker->pid );
-            walker = walker->next_proc_ptr;
-         }
-         console("\n========================================================================================\n\n");
+         console ("Blocked Proc Id: %d\n", walker->pid );
+         walker = walker->next_proc_ptr;
+      }
+      console("\n========================================================================================\n\n");
 
-   }/*print_Mbox_Blocked_List*/
+}/*print_Mbox_Blocked_List*/
+
+/* -------------------------------------------------------------------------
+   Name - nullsys()
+   Purpose - prints an error message
+   Parameters - sysargs
+   Returns - Nothing
+   --------------------------------------------------------------------------*/
+static void nullsys(sysargs *args)
+{ 
+	printf("nullsys(): Invalid syscall %d. Halting...\n", args->number); 
+	halt(1);
+} /* nullsys */
