@@ -756,6 +756,71 @@ int check_io()
    return 0;
 } /* check_io */
 
+/* -------------------------------------------------------------------------
+   Name - disk_handler()
+   Purpose - Code to handle Disk innterupts.
+   Parameters - int device type, pointer to which unit  
+   Returns -
+   --------------------------------------------------------------------------*/
+
+void disk_handler(int dev, void *punit){
+
+int status;
+int result;
+int unit = (int)punit;
+/* Sanity checks */
+//make sure the arguments dev and unit are OK
+/*check the mailbox set-up for the disk unit. If not OK, return
+device input(DISK DEV, unit, &status);*/
+//result = MboxCondSend(disk_mbox[unit], &status, sizeof(status));
+//more checking on the return result
+
+}
+ /* disk_handler */
+
+
+/* -------------------------------------------------------------------------
+   Name - clock_handler2()
+   Purpose - Code to handle clock innterupts.
+   Parameters - int device type, pointer to which unit 
+   Returns - 
+   --------------------------------------------------------------------------*/
+
+   void clock_handler2(int dev, void *punit){
+
+       //clock_ticker is static so it keeps accumulating every call of clock_handler2 while program is being ran.
+      static int clock_ticker = 0;   
+      int dummy_value = 0; //for dummy message to send to anybody receiving on the clock mailbox
+
+      //add a 20ms tick to clock_ticker
+      clock_ticker = clock_ticker + CLOCK_MS;
+      //check if 5 interrupts have happened
+      if (clock_ticker % 100 == 0)
+      {
+            //Five interrupts have occured for a total of 100ms do a MboxCondSend to clock mailbox
+            MboxCondSend(CLOCK_DEV, &dummy_value, sizeof(int)); //REVIEW THIS
+
+            //Call timeslice to kick out current process if need be.
+            time_slice();
+      }
+      
+   
+   }/* clock_handler2*/
+
+
+/* -------------------------------------------------------------------------
+   Name - terminal_handler()
+   Purpose - Code to handle terminal interupts.
+   Parameters - int device type, pointer to which unit 
+   Returns - 
+   --------------------------------------------------------------------------*/
+
+   void terminal_handler(int dev, void *punit){
+
+      //do stuff
+   }/* terminal_handler*/
+
+
 
 /* -------------------------------------------------------------------------
    Name - waitdevice()
@@ -764,12 +829,12 @@ int check_io()
    Returns - -1 if the process was zap'd while waiting
               0 if successful
    --------------------------------------------------------------------------*/
-int waitdevice(int type, int unit, int *status)
-{
+int waitdevice(int type, int unit, int *status){
+
    int result = 0;
    int table_offset;	
    // Sanity checks
-   if (type != CLOCK_DEV || type != DISK_DEV || type != TERM_DEV)
+   if (type != CLOCK_DEV && type != DISK_DEV && type != TERM_DEV)
    {
       if (DEBUG2 && debugflag2)
       {
