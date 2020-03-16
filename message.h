@@ -28,12 +28,12 @@ struct mailbox {
 };
 
 struct mail_slot {
-   int       is_free;         //added by Michael for MboxSend
+   int       is_free;                  //added by Michael for MboxSend
    int       mbox_id;
    int       status;
    int       message_size;
-   slot_ptr  next_slot_ptr;   //slot_ptr pointing to the next message
-   char      message [MAX_MESSAGE];         //added by Michael for MboxSend
+   slot_ptr  next_slot_ptr;            //slot_ptr pointing to the next message
+   char      message [MAX_MESSAGE];    //added by Michael for MboxSend
    /* other items as needed... */
 };
 
@@ -50,11 +50,11 @@ union psr_values {
    unsigned int integer_part;
 };
 
-struct mbox_proc {               //added by Michael from developement_slides1
+struct mbox_proc {                           //added by Michael from developement_slides1
    int            pid;
-   int            blocked_how;   //indication of whether process is blocked on a send or a receive
-   int            blocked;       //indication of whether process is blocked
-   mbox_proc_ptr  next_proc_ptr; //pointing to the next blocked process
+   int            blocked_how;               //indication of whether process is blocked on a send or a receive
+   int            blocked;                   //indication of whether process is blocked
+   mbox_proc_ptr  next_proc_ptr;             //pointing to the next blocked process
    int            message_size;
    char           message [MAX_MESSAGE];
    /* other items as needed */

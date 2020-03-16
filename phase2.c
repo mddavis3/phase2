@@ -46,7 +46,7 @@ static void nullsys(sysargs *);
 
 /* -------------------------- Globals ------------------------------------- */
 
-int debugflag2 = 0;
+int debugflag2 = 1;
 
 /* the mail boxes */
 mail_box MailBoxTable[MAXMBOX];
@@ -447,7 +447,6 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
    //check for zero-slot mailbox
    if (MailBoxTable[i].num_slots == 0)
    {
-      //check if mailbox has blocked sender
       if (MailBoxTable[i].proc_ptr == NULL)
       {
          //no blocked sender, block the receiver
@@ -488,24 +487,20 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
          return message_size;
       }
       
-      //the message was copied to MailBoxTable[i].proc_ptr->message??????????????????????????? the buffer by the sender
-      // move message from MailBoxTable[i].proc_ptr->message to msg_ptr
-   /*   console("The contents of mailbox[i].procptr->message is : %d \n", &MailBoxTable[i].proc_ptr->message );
-         memcpy(msg_ptr, &MailBoxTable[i].proc_ptr->message, message_size);
-         console("After memcpyb4 crash\n");
-      console("MboxReceive(): the msg-ptr after memcopy is: %d\n", *(int*)msg_ptr);
-      //do a separate return here */
+      // move message from proc struct to msg_ptr
+      memcpy(msg_ptr, &MboxProcs[getpid()%MAXPROC].message, MboxProcs[getpid()%MAXPROC].message_size);
       return MboxProcs[getpid()%MAXPROC].message_size;
-   }//end zero slot code
+   } //end zero slot code
    
+
    //check the length of the message
    if (MailBoxTable[i].slot_ptr->message_size > msg_size)
    {
       //return -1 if the message is too big
       if (DEBUG2 && debugflag2)
-         {
-            console ("MboxReceive(): message is too big for receiver's buffer. Return -1\n");
-         }
+      {
+         console ("MboxReceive(): message is too big for receiver's buffer. Return -1\n");
+      }
       return (-1);
    }
    message_size = MailBoxTable[i].slot_ptr->message_size;
@@ -563,7 +558,8 @@ int MboxRelease(int mailboxID)
    {
       while (MailBoxTable[i].num_blocked_procs > 0)
       {
-         mass_unbloxodus(i);
+         unbloxodus(i);
+         //mass_unbloxodus(i);
       }
    }
 
@@ -651,14 +647,15 @@ int MboxCondSend(int mailboxID, void *message, int message_size)
             return (-1);
          }
 
-         //assign message size to the recieving process
          //copy the message to the receiver
-         //MailBoxTable[i].proc_ptr->message_size = message_size;
+         if (DEBUG2 && debugflag2)
+         {
          console("MboxCondSend(): Address of message pointer is: %p\n", message);
          console("MboxCondSend(): contents of message pointer is: %d\n", *(int*)message);
+         }
          
-         memcpy(&MailBoxTable[i].proc_ptr->message, message, message_size); //some wonkiness here on test13 - memcpy weirdness???
-console("MboxCondSend(): the contnts at MailBoxTable[i].proc_ptr->message after memcopy is: %d\n", MailBoxTable[i].proc_ptr->message);
+         memcpy(&MailBoxTable[i].proc_ptr->message, message, message_size);
+
          //unblock receiver
          unbloxodus(i);
 
@@ -936,7 +933,10 @@ void clock_handler2(int dev, void *punit)
       }
 
       //Five interrupts have occured for a total of 100ms do a MboxCondSend to clock mailbox
-      console("clock_handler(): dummy_value %p\n", &dummy_value);
+      if (DEBUG2 && debugflag2)
+      {
+         console("clock_handler(): dummy_value %p\n", &dummy_value);
+      }
       MboxCondSend(CLOCK_DEV, &dummy_value, sizeof(int)); //REVIEW THIS
       
 
@@ -1008,14 +1008,10 @@ void syscall_handler(int dev, void *unit)
       halt(1);
    }
    /* check what system: if the call is not in the range between 0 and MAXSYSCALLS, , halt(1) */ 
-   if (sys_ptr->number < 1 || sys_ptr->number > MAXSYSCALLS -1)
+   if (sys_ptr->number < 1 || sys_ptr->number >= MAXSYSCALLS)
    {
-      if (DEBUG2 && debugflag2)
-      {
-         console ("syscall_handler(): sys_ptr->number not in range.  halt(1).\n");
-      }
+      console ("syscall_handler(): sys_ptr->number not in range.  halt(1).\n");
       halt(1);
-
    }
    
 	/* Now it is time to call the appropriate system call handler */ 
