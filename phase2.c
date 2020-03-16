@@ -46,7 +46,7 @@ static void nullsys(sysargs *);
 
 /* -------------------------- Globals ------------------------------------- */
 
-int debugflag2 = 1;
+int debugflag2 = 0;
 
 /* the mail boxes */
 mail_box MailBoxTable[MAXMBOX];
@@ -57,13 +57,13 @@ mbox_proc MboxProcs[MAXPROC];                               //added by Michael f
 int global_mbox_id;
 
 /* Dummy mailbox used for initialization */                 //added by Michael for start1
-mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+mail_box dummy_mbox = {0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 /* Dummy mailslot used for initialization */                //added by Michael for start1
 mail_slot dummy_slot = {0, NULL, NULL, NULL, NULL, NULL};
 
 /* Dummy proc used for initialization */                    //added by Michael for start1
-mbox_proc dummy_proc = {NULL, NULL, NULL, NULL, NULL, NULL};
+mbox_proc dummy_proc = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 /* define the variable for the interrupt vector declared by USLOSS */
 void(*int_vec[NUM_INTS])(int dev, void * unit);
@@ -287,13 +287,32 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
          //initialize the mbox_proc values
          MboxProcs[getpid()%MAXPROC].pid = getpid();
          MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
-         MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZERO;
+         MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZEROSENDING;
          MailBoxTable[i].num_blocked_procs++;
-         insert_blocked_proc(i);
-         block_me(MBOXZERO); 
+         insert_blocked_proc(i); 
+
+         //if process is zapped while it's blocked, return -3
+         if ( block_me(MBOXZEROSENDING) == -1)
+         {
+            return -3;
+         }
+
+         //if the mailbox was released, return -3
+         if (MailBoxTable[i].status == RELEASED)
+         {
+            //check if this is the last process blocked on the mailbox
+            //if it is, unblock the releaser using unblock_proc
+            if (MboxProcs[getpid()%MAXPROC].last_status == LASTPROC)
+            {
+               unblock_proc(MailBoxTable[i].releaser_pid);
+            }
+            return -3;
+         }
+         
+         return 0;
       }
       
-      if (MailBoxTable[i].proc_ptr != NULL)
+      if (MailBoxTable[i].proc_ptr != NULL && MailBoxTable[i].proc_ptr->blocked_how == MBOXZERORECEIVING)
       {
          //the receiver is blocked
          //check the size of receiver's buffer
@@ -308,11 +327,11 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
          }
 
          //assign message size to the recieving process
-         //copy the message to the receiver assuming the message ptr is not NULL ***********added this to try to pass test11
+         //copy the message to the receiver assuming the message ptr is not NULL
          if(msg_ptr !=NULL)
          {
-         MailBoxTable[i].proc_ptr->message_size = msg_size;
-         memcpy(&MailBoxTable[i].proc_ptr->message, msg_ptr, msg_size);
+            MailBoxTable[i].proc_ptr->message_size = msg_size;
+            memcpy(&MailBoxTable[i].proc_ptr->message, msg_ptr, msg_size);
          }
          //unblock receiver
          unbloxodus(i);
@@ -320,7 +339,33 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
          //return 0 for success
          return 0;
       }
-      
+      else //the process blocked on the mailbox is a sender, so block this process on the mailbox
+      {
+         MboxProcs[getpid()%MAXPROC].pid = getpid();
+         MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
+         MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZEROSENDING;
+         MailBoxTable[i].num_blocked_procs++;
+         insert_blocked_proc(i);
+
+         //if process is zapped while it's blocked, return -3
+         if ( block_me(MBOXZEROSENDING) == -1)
+         {
+            return -3;
+         }
+
+         //if the mailbox was released, return -3
+         if (MailBoxTable[i].status == RELEASED)
+         {
+            //check if this is the last process blocked on the mailbox
+            //if it is, unblock the releaser using unblock_proc
+            if (MboxProcs[getpid()%MAXPROC].last_status == LASTPROC)
+            {
+               unblock_proc(MailBoxTable[i].releaser_pid);
+            }
+            return -3;
+         }
+      }
+
       //consider other cases here...
       return 0;
    }//end zero slot code
@@ -341,11 +386,22 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
       //throw the process into the blocked list on that mailbox
       insert_blocked_proc(i);
 
-      //block the sender cus it's full if blockme returns -1 then the process was zapped during its block_me call so return -3 REVIEW
-      //also if the mailbox was released return -3
-      if ( block_me(MBOXFULL) == -1 || MailBoxTable[i].status == RELEASED)
+      //block the sender cus it's full if blockme returns -1 
+      //then the process was zapped during its block_me call so return -3
+      if ( block_me(MBOXFULL) == -1)
       {
-         //add console error message here perhaps??? - REVIEW
+         return -3;
+      }
+
+      //if the mailbox was released, return -3
+      if (MailBoxTable[i].status == RELEASED)
+      {
+         //check if this is the last process blocked on the mailbox
+         //if it is, unblock the releaser using unblock_proc
+         if (MboxProcs[getpid()%MAXPROC].last_status == LASTPROC)
+         {
+            unblock_proc(MailBoxTable[i].releaser_pid);
+         }
          return -3;
       }
    }
@@ -435,11 +491,22 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
       MailBoxTable[i].num_blocked_procs++;
 
       //throw the process into the blocked list of the mailbox and then block process
-      //if process was zapped while blocked or mailbox was released return -3
+      //if process was zapped while blocked, return -3
       insert_blocked_proc(i);
-      if (block_me(MBOXEMPTY) == -1 || MailBoxTable[i].status == RELEASED)
+      if (block_me(MBOXEMPTY) == -1)
       {
-         //add a console error message here perhaps??? - REVIEW
+         return -3;
+      }
+
+      //if the mailbox was released, return -3
+      if (MailBoxTable[i].status == RELEASED)
+      {
+         //check if this is the last process blocked on the mailbox
+         //if it is, unblock the releaser using unblock_proc
+         if (MboxProcs[getpid()%MAXPROC].last_status == LASTPROC)
+         {
+            unblock_proc(MailBoxTable[i].releaser_pid);
+         }
          return -3;
       }
    }
@@ -454,14 +521,35 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
          //initialize the mbox_proc values
          MboxProcs[getpid()%MAXPROC].pid = getpid();
          MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
-         MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZERO;
+         MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZERORECEIVING;
          MboxProcs[getpid()%MAXPROC].message_size = msg_size;
          MailBoxTable[i].num_blocked_procs++;
          insert_blocked_proc(i);
-         block_me(MBOXZERO); 
+
+         //if the process was zapped while blocked, return -3 
+         if (block_me(MBOXZERORECEIVING) == -1)
+         {
+            return -3;
+         }
+
+         //if the mailbox was released, return -3
+         if (MailBoxTable[i].status == RELEASED)
+         {
+            //check if this is the last process blocked on the mailbox
+            //if it is, unblock the releaser using unblock_proc
+            if (MboxProcs[getpid()%MAXPROC].last_status == LASTPROC)
+            {
+               unblock_proc(MailBoxTable[i].releaser_pid);
+            }
+            return -3;
+         }
+
+         //move message from proc struct to msg_ptr
+         memcpy(msg_ptr, &MboxProcs[getpid()%MAXPROC].message, MboxProcs[getpid()%MAXPROC].message_size);
+         return MboxProcs[getpid()%MAXPROC].message_size;
       }
       
-      if (MailBoxTable[i].proc_ptr != NULL)
+      if (MailBoxTable[i].proc_ptr != NULL && MailBoxTable[i].proc_ptr->blocked_how == MBOXZEROSENDING)
       {
          //the sender is blocked
          //check the size
@@ -485,6 +573,33 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 
          //return the message_size
          return message_size;
+      }
+      else //the process blocked on the mailbox is a receiver, so block this process
+      {
+         MboxProcs[getpid()%MAXPROC].pid = getpid();
+         MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
+         MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZERORECEIVING;
+         MboxProcs[getpid()%MAXPROC].message_size = msg_size;
+         MailBoxTable[i].num_blocked_procs++;
+         insert_blocked_proc(i);
+
+         //if the process was zapped while blocked, return -3 
+         if (block_me(MBOXZERORECEIVING) == -1)
+         {
+            return -3;
+         }
+
+         //if the mailbox was released, return -3
+         if (MailBoxTable[i].status == RELEASED)
+         {
+            //check if this is the last process blocked on the mailbox
+            //if it is, unblock the releaser using unblock_proc
+            if (MboxProcs[getpid()%MAXPROC].last_status == LASTPROC)
+            {
+               unblock_proc(MailBoxTable[i].releaser_pid);
+            }
+            return -3;
+         }
       }
       
       // move message from proc struct to msg_ptr
@@ -542,6 +657,7 @@ int MboxRelease(int mailboxID)
       }
    }
    MailBoxTable[i].status = RELEASED;
+   MailBoxTable[i].releaser_pid = getpid();
 
    //reclaim the mailslots from the mailslot table
    if (MailBoxTable[i].num_used_slots > 0)
@@ -554,20 +670,12 @@ int MboxRelease(int mailboxID)
    }
 
    //check for blocked procs and unblock them
+   //block the releaser so that unblocked procs have a chance to finish
    if (MailBoxTable[i].num_blocked_procs > 0)
-   {
-      while (MailBoxTable[i].num_blocked_procs > 0)
-      {
-         unbloxodus(i);
-         //mass_unbloxodus(i);
-      }
+   {      
+      mass_unbloxodus(i);
+      block_me(MBOXRELEASING);
    }
-
-   //return -3 if process was zapped while releasing the mailbox
-   //
-   //
-   //
-   //DO MORE STUFF WITH BLOCKED PROCS ON MAILBOX??? - REVIEW
 
    //return 0 if successful
    return 0;
@@ -617,6 +725,16 @@ int MboxCondSend(int mailboxID, void *message, int message_size)
       return (-1);
    }
 
+   //return -1 if the mailbox was released
+   if (MailBoxTable[i].status == RELEASED)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("MboxCondSend(): Mailbox was released. Return -1\n");
+      }
+      return (-1);
+   }
+
    //check if zero-slot mailbox
    if (MailBoxTable[i].num_slots == 0)
    {
@@ -654,6 +772,16 @@ int MboxCondSend(int mailboxID, void *message, int message_size)
          console("MboxCondSend(): contents of message pointer is: %d\n", *(int*)message);
          }
          
+         //check if mailbox was released, return -1 if so
+         if (MailBoxTable[i].status == RELEASED)
+         {
+            if (DEBUG2 && debugflag2)
+            {
+               console ("MboxCondSend(): Mailbox was released. Return -1\n");
+            }
+            return (-1);
+         }
+
          memcpy(&MailBoxTable[i].proc_ptr->message, message, message_size);
 
          //unblock receiver
@@ -691,6 +819,16 @@ int MboxCondSend(int mailboxID, void *message, int message_size)
          }
          return (-2);
       }
+   }
+
+   //return -1 if the mailbox was released
+   if (MailBoxTable[i].status == RELEASED)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("MboxCondSend(): Mailbox was released. Return -1\n");
+      }
+      return (-1);
    }
 
    //initialize the mail_slot struct
@@ -752,6 +890,16 @@ int MboxCondReceive(int mailboxID, void *message, int max_message_size)
       }
    }
 
+   //return -1 if the mailbox was released
+   if (MailBoxTable[i].status == RELEASED)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("MboxCondReceive(): Mailbox was released. Return -1\n");
+      }
+      return (-1);
+   }
+
    //check if the mailbox has any messages
    if (MailBoxTable[i].num_used_slots == 0)
    {
@@ -774,6 +922,16 @@ int MboxCondReceive(int mailboxID, void *message, int max_message_size)
    }
    message_size = MailBoxTable[i].slot_ptr->message_size;
 
+   //return -1 if the mailbox was released
+   if (MailBoxTable[i].status == RELEASED)
+   {
+      if (DEBUG2 && debugflag2)
+      {
+         console ("MboxCondReceive(): Mailbox was released. Return -1\n");
+      }
+      return (-1);
+   }
+   
    //copy the message from the mail slot to the receiver's message buffer
    memcpy(message, &MailBoxTable[i].slot_ptr->message, message_size);
 
@@ -1217,14 +1375,34 @@ void remove_blocked_proc(int mailbox)
 void mass_unbloxodus(int mailbox)
 {
    int pid;
-     
+   /*int zap_flag = 0;
+
+   if (MailBoxTable[mailbox].status == RELEASED)
+   {
+      zap_flag = 1;
+   }*/
+
    while(MailBoxTable[mailbox].proc_ptr != NULL)
-   {                                           
+   {   
+      //if statement checks if the process is the last blocked process on the mailbox
+      //marks it as the last process if it is (used for MboxRelease)    
+      if (MailBoxTable[mailbox].proc_ptr->next_proc_ptr == NULL)
+      {
+         MailBoxTable[mailbox].proc_ptr->last_status = LASTPROC;
+      }                                  
       pid = MailBoxTable[mailbox].proc_ptr->pid;
+
+      /*if the zap_flag is 1, then zap the processes as they are being unblocked
+      if (zap_flag == 1)
+      {
+         zap(pid);
+      }*/
+
       MailBoxTable[mailbox].num_blocked_procs--;
       remove_blocked_proc(mailbox);
       unblock_proc(pid);
    }
+
    return;
 } /* mass_unbloxodus */
 

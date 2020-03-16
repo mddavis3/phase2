@@ -4,9 +4,12 @@
 #define INACTIVE 0            //added by Michael for MboxSend
 #define MBOXFULL 11           //added by Michael for MboxSend
 #define MBOXEMPTY 12          //added for MboxReceive
-#define MBOXZERO 13           //added for zero-slot mailboxes
+#define MBOXZEROSENDING 13    //added for zero-slot mailboxes
+#define MBOXZERORECEIVING 14
+#define MBOXRELEASING 15      
 #define BLOCKED 1
 #define UNBLOCKED 0
+#define LASTPROC 1
 
 typedef struct mail_slot *slot_ptr;
 typedef struct mailbox mail_box;
@@ -23,7 +26,8 @@ struct mailbox {
    mbox_proc_ptr  proc_ptr;            //pointing to process table entry - first process blocked on the mailbox
    slot_ptr       slot_ptr;            //pointing to the first message sent to the mailbox 
    int            num_used_slots;      //added to keep track of how many slots are being used 
-   int            num_blocked_procs;   //keep track of how many blocked processes for MboxRelease      
+   int            num_blocked_procs;   //keep track of how many blocked processes for MboxRelease
+   int            releaser_pid;      
    /* other items as needed... */
 };
 
@@ -57,5 +61,6 @@ struct mbox_proc {                           //added by Michael from developemen
    mbox_proc_ptr  next_proc_ptr;             //pointing to the next blocked process
    int            message_size;
    char           message [MAX_MESSAGE];
+   int            last_status;
    /* other items as needed */
 };
