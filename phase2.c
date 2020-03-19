@@ -658,6 +658,8 @@ int MboxRelease(int mailboxID)
    }
    MailBoxTable[i].status = RELEASED;
    MailBoxTable[i].releaser_pid = getpid();
+   MailBoxTable[i].is_free = 0;
+   MailBoxTable[i].mbox_id = NULL;
 
    //reclaim the mailslots from the mailslot table
    if (MailBoxTable[i].num_used_slots > 0)
@@ -673,7 +675,12 @@ int MboxRelease(int mailboxID)
    //block the releaser so that unblocked procs have a chance to finish
    if (MailBoxTable[i].num_blocked_procs > 0)
    {      
+     // console("MboxRelease() callin blocked proc list on mbox %d\n",i);
+     // print_Mbox_Blocked_List(i);
       mass_unbloxodus(i);
+    //  console("MboxRelease(): right after mass unbloxodus called now showing blocked proc list on Mbox %d\n", i);
+    //  print_Mbox_Blocked_List(i);
+   // dump_processes();
       block_me(MBOXRELEASING);
    }
 
