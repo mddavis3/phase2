@@ -288,6 +288,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
          MboxProcs[getpid()%MAXPROC].pid = getpid();
          MboxProcs[getpid()%MAXPROC].blocked = BLOCKED;
          MboxProcs[getpid()%MAXPROC].blocked_how = MBOXZEROSENDING;
+         MboxProcs[getpid()%MAXPROC].message_size = msg_size; //maybe add a sanity check here
+         memcpy(&MboxProcs[getpid()%MAXPROC].message, msg_ptr, msg_size);
          MailBoxTable[i].num_blocked_procs++;
          insert_blocked_proc(i); 
 
