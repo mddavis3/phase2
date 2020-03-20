@@ -676,13 +676,8 @@ int MboxRelease(int mailboxID)
    //check for blocked procs and unblock them
    //block the releaser so that unblocked procs have a chance to finish
    if (MailBoxTable[i].num_blocked_procs > 0)
-   {      
-     // console("MboxRelease() callin blocked proc list on mbox %d\n",i);
-     // print_Mbox_Blocked_List(i);
+   {       
       mass_unbloxodus(i);
-    //  console("MboxRelease(): right after mass unbloxodus called now showing blocked proc list on Mbox %d\n", i);
-    //  print_Mbox_Blocked_List(i);
-   // dump_processes();
       block_me(MBOXRELEASING);
    }
 
